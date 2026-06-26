@@ -1,3 +1,4 @@
+// vite.config.ts
 import { defineConfig } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
@@ -15,36 +16,41 @@ function figmaAssetResolver() {
   }
 }
 
-export default defineConfig({
-  // 👈 GitHub Pages 배포를 위한 기준 경로를 추가했습니다.
-  base: "/aaaa/", 
+export default defineConfig(({ mode }) => {
+  // 💻 로컬 개발 모드(development)인지 확인합니다.
+  const isDev = mode === 'development';
 
-  plugins: [
-    figmaAssetResolver(),
-    // The React and Tailwind plugins are both required for Make, even if
-    // Tailwind is not being actively used – do not remove them
-    react(),
-    tailwindcss(),
-  ],
-  resolve: {
-    alias: {
-      // Alias @ to the src directory
-      '@': path.resolve(__dirname, './src'),
+  return {
+    base: "/aaaa/", 
+
+    plugins: [
+      figmaAssetResolver(),
+      react(),
+      tailwindcss(),
+    ],
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, './src'),
+      },
     },
-  },
 
-  // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
-  assetsInclude: ['**/*.svg', '**/*.csv'],
-  
-  server: {
-    proxy: {
-      // 💡 브라우저가 /api/drug로 시작하는 주소로 요청하면 Vite가 가로챕니다.
-      '/api/drug': {
-        target: 'https://apis.data.go.kr', // 진짜 가야 할 식약처 서버 주소
-        changeOrigin: true,
-        // 주소 앞부분의 /api/drug를 지우고 식약처 주소 뒤에 붙여줍니다.
-        rewrite: (path) => path.replace(/^\/api\/drug/, '')
+    assetsInclude: ['**/*.svg', '**/*.csv'],
+    
+    // 🎯 [핵심 해결] 전역 변수(define)를 통해 전역 환경 주소를 컴파일 시점에 고정합니다.
+    define: {
+      __API_DRUG_URL__: isDev 
+        ? JSON.stringify('/api/drug') // 로컬 개발 시에는 Proxy 경로 사용
+        : JSON.stringify('https://api.allorigins.win/raw?url=https://apis.data.go.kr') // 배포 시에는 CORS 우회 주소로 자동 고정
+    },
+
+    server: {
+      proxy: {
+        '/api/drug': {
+          target: 'https://apis.data.go.kr',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/drug/, '')
+        }
       }
-    }
-  },
-})
+    },
+  };
+});

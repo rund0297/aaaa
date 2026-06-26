@@ -4,9 +4,9 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "build": "vite build",
     "dev": "vite",
-    "predeploy": "npm run build",
+    "build": "vite build",
+    "predeploy": "rimraf dist && npm run build",
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {

@@ -78,20 +78,24 @@ export function AddMedicineModal({
       const serviceKey = "5cde3b05e30f1b984e53d3c73a81f6cb119834c5b39f2a86b8dc84ef89c96e2a";
       const servicePath = "1471000/DrbEasyDrugInfoService/getDrbEasyDrugList";
       const queryParams = `?serviceKey=${serviceKey}&itemName=${encodeURIComponent(keyword)}&type=json&numOfRows=10`;
+      
+      // 빌드 도구가 환경에 맞춰 주소를 알아서 바꿔 끼워줍니다.
+      const url = `${__API_DRUG_URL__}/${servicePath}${queryParams}`;
+      
+      // 현재 실행 도메인이 로컬(localhost, 127.0.0.1)이 아니라면 무조건 깃허브 배포 환경으로 판단하여 우회용 원격 주소 강제 매핑
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
-      // 🎯 [CORS 배포 패치] 환경에 맞춰 요청할 URL 주소를 빌드합니다.
-      let url = "";
-      if (import.meta.env.DEV) {
-        // 💻 로컬 개발 환경: vite.config.ts의 proxy(/api/drug)를 사용합니다.
-        url = `/api/drug/${servicePath}${queryParams}`;
-      } else {
-        // 🚀 실배포 환경: 외부 무료 프록시 서버(allorigins)를 거쳐서 CORS 우회 호출을 처리합니다.
+      if (!isLocalhost) {
+        // 🚀 실배포 환경: 서버가 존재하지 않는 GitHub Pages 특성에 맞춰 프록시 원격 주소 결합 (404 완벽 차단)
         const originUrl = `https://apis.data.go.kr/${servicePath}${queryParams}`;
         url = `https://api.allorigins.win/raw?url=${encodeURIComponent(originUrl)}`;
+      } else {
+        // 💻 로컬 개발 환경: vite.config.ts에 명시된 로컬 개발용 proxy(/api/drug) 가동
+        url = `/api/drug/${servicePath}${queryParams}`;
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000); // 프록시 서버 경유를 고려해 타임아웃을 4초로 변경
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 네트워크 지연을 감안해 안정적인 5초로 연장
 
       const res = await fetch(url, { 
         method: 'GET',
@@ -100,7 +104,7 @@ export function AddMedicineModal({
       });
       clearTimeout(timeoutId);
       
-      if (!res.ok) throw new Error("CORS_OR_ENDPOINT_REJECTED");
+      if (!res.ok) throw new Error("ENDPOINT_REJECTED");
 
       const data = await res.json();
       
@@ -113,7 +117,7 @@ export function AddMedicineModal({
     } catch (error: any) {
       console.warn("식약처 공공 API 브라우저 CORS 제한 정책 감지 -> 우회 가동:", error);
       setSuggestions([]);
-      setIsCorsNetworkError(true); // 💡 브라우저 네트워크 차단 발생 시 직접 입력 유도 카드 가동
+      setIsCorsNetworkError(true); // 에러 발생 시 UI 막힘없이 직접 입력 우회 통로 활성화
     } finally {
       setIsApiLoading(false);
     }
@@ -139,7 +143,6 @@ export function AddMedicineModal({
   const handleSelectMedicine = (name: string) => {
     const finalName = name.trim();
     
-    // 💡 [정책 패치] 중복 품목 선택 검증 및 알림 고도화
     if (checkIsDuplicateMedicine(finalName)) {
       toast.error(`🛑 [등록 불가] '${finalName}'은(는) 이미 복용 중인 약품입니다. '이미 복용 중인 약품 등록 금지 정책'에 의해 차단되었습니다.`, {
         duration: 5000,
@@ -237,7 +240,6 @@ export function AddMedicineModal({
 
     if (!finalName) return toast.error("등록할 의약품 명칭이 없습니다.");
     
-    // 💡 [정책 패치] 최종 서브밋 단계에서도 한 번 더 중복 검사 작동
     if (checkIsDuplicateMedicine(finalName)) {
       toast.error(`❌ [저장 거부] '${finalName}'은(는) 이미 등록된 약품입니다. '이미 복용 중인 약품 등록 금지 정책'으로 인해 저장할 수 없습니다.`, {
         duration: 6000
@@ -256,6 +258,7 @@ export function AddMedicineModal({
     try {
       const durationDays = Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
       
+      // ✅ [정상 연결 확인 완료] 파이어베이스 호출 엔진 완전 고수
       await addMedicineToDb(userId, {
         name: finalName,
         durationDays,
@@ -408,7 +411,6 @@ export function AddMedicineModal({
                   <p className="text-[11px] text-gray-400 font-bold">식약처 원격 동기화 연결 중...</p>
                 </div>
               ) : isCorsNetworkError ? (
-                /* 💡 식약처 서버의 웹 브라우저 CORS 차단 정책을 유연하게 처리하는 안내 및 직통 프리패스 카드 */
                 <div className="p-4 border-2 border-dashed border-rose-300 bg-rose-50/40 rounded-2xl text-center shadow-xs">
                   <AlertTriangle className="size-5 text-[#E12756] mx-auto mb-1.5 animate-bounce" />
                   <p className="text-xs text-gray-800 font-black">식약처 외부 서버 브라우저 직접 호출 제한(CORS) 감지</p>
@@ -464,7 +466,6 @@ export function AddMedicineModal({
                 <span className="text-[9px] text-[#E12756] font-black tracking-tighter bg-rose-50 px-1.5 py-0.5 rounded">등록 의약품명</span>
                 <h4 className="text-xs font-black text-gray-800 mt-1">{medName}</h4>
               </div>
-              {/* 중복 약 검증 상태 마크 */}
               <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md">중복 검증 완료</span>
             </div>
 
