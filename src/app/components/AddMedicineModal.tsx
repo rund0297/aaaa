@@ -1,9 +1,9 @@
 // src/app/components/AddMedicineModal.tsx
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Search, Image, ArrowLeft, Calendar, Clock, Camera, ShieldAlert, AlertTriangle, Loader2 } from 'lucide-react';
+import { Search, Image, ArrowLeft, Calendar, Clock, Camera, ShieldAlert, AlertTriangle, Loader2, Ban } from 'lucide-react';
 import { addMedicineToDb } from '../../services/firebaseService';
 
 interface AddMedicineModalProps {
@@ -29,8 +29,8 @@ export function AddMedicineModal({
   const [suggestions, setSuggestions] = useState<string[]>([]); 
   const [isApiLoading, setIsApiLoading] = useState(false); 
   const [medTypeGuide, setMedTypeGuide] = useState<{ type: string; guide: string } | null>(null);
-  const [isTimeoutError, setIsTimeoutError] = useState(false); // 💡 타임아웃 상태 추적
-  
+  const [isCorsNetworkError, setIsCorsNetworkError] = useState(false); // 💡 식약처 CORS/네트워크 차단 감지 상태
+
   // 📅 복용 일정 및 수량 입력 데이터 상태
   const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState<string>('');
@@ -55,33 +55,43 @@ export function AddMedicineModal({
     });
   };
 
-  // 🔍 [식약처 API 고속 연동 + 타임아웃 세이프 가드 엔진]
+  // 🔒 [스마트 정밀 중복 체크 엔진] - 공백과 대소문자를 제거하여 완벽하게 중복 판별
+  const checkIsDuplicateMedicine = (name: string): boolean => {
+    const targetName = name.replace(/\s+/g, '').toLowerCase();
+    return currentCabinetItems.some(
+      item => item.name.replace(/\s+/g, '').toLowerCase() === targetName
+    );
+  };
+
+  // 🔍 [식약처 e약은요 API 연동 엔진]
   const queryFoodDrugSafetyApi = async (keyword: string) => {
     if (!keyword.trim()) {
       setSuggestions([]);
-      setIsTimeoutError(false);
+      setIsCorsNetworkError(false);
       return;
     }
 
     setIsApiLoading(true);
-    setIsTimeoutError(false);
+    setIsCorsNetworkError(false);
 
     try {
       const serviceKey = "5cde3b05e30f1b984e53d3c73a81f6cb119834c5b39f2a86b8dc84ef89c96e2a";
-      const url = `https://apis.data.go.kr/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList` +
-                  `?serviceKey=${serviceKey}` +
-                  `&itemName=${encodeURIComponent(keyword)}` +
-                  `&type=json` +
-                  `&numOfRows=10`; // 속도를 위해 한 페이지 노출 항목을 10개로 최적화
+      // 💡 [교정 적용] 앞부분 진짜 주소를 /api/drug 라는 가짜 주소(프록시 경로)로 교체합니다.
+      const baseUrl = "/api/drug/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList";
+      const url = `${baseUrl}?serviceKey=${serviceKey}&itemName=${encodeURIComponent(keyword)}&type=json&numOfRows=10`;
 
-      // ⏱️ 공공데이터 서버 전용 2.5초 초고속 타임아웃 제어선 구축
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const timeoutId = setTimeout(() => controller.abort(), 2500); // 2.5초 빠른 타임아웃
 
-      const res = await fetch(url, { signal: controller.signal });
+      const res = await fetch(url, { 
+        method: 'GET',
+        mode: 'cors',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal 
+      });
       clearTimeout(timeoutId);
       
-      if (!res.ok) throw new Error("서버 에러");
+      if (!res.ok) throw new Error("CORS_OR_ENDPOINT_REJECTED");
 
       const data = await res.json();
       
@@ -92,38 +102,46 @@ export function AddMedicineModal({
         setSuggestions([]);
       }
     } catch (error: any) {
-      console.error("식약처 조회 프로세스 지연 또는 거부:", error);
+      console.warn("식약처 공공 API 브라우저 CORS 제한 정책 감지 -> 우회 가동:", error);
       setSuggestions([]);
-      // 타임아웃이거나 서버가 무거울 때 플래그 작동
-      if (error.name === 'AbortError' || error) {
-        setIsTimeoutError(true);
-      }
+      setIsCorsNetworkError(true); // 💡 브라우저 네트워크 차단 발생 시 우회 UI 스위치 ON
     } finally {
       setIsApiLoading(false);
     }
   };
 
-  // ⚡ [체감 속도 극대화] 실시간 타이핑 인식 디바운스 엔진 (300ms)
+  // ⚡ 실시간 입력 디바운스 필터 (300ms)
   useEffect(() => {
     if (entryMode !== 'MANUAL_SEARCH') return;
 
     const timer = setTimeout(() => {
-      if (searchKeyword.trim().length >= 2) { // 2글자 이상 입력 시 자동 가동
+      if (searchKeyword.trim().length >= 2) {
         queryFoodDrugSafetyApi(searchKeyword);
       } else {
         setSuggestions([]);
-        setIsTimeoutError(false);
+        setIsCorsNetworkError(false);
       }
     }, 300);
 
     return () => clearTimeout(timer);
   }, [searchKeyword, entryMode]);
 
+  // 🛑 리스트에서 약물 선택 처리
   const handleSelectMedicine = (name: string) => {
-    setMedName(name);
+    const finalName = name.trim();
+    
+    // 💡 [정책 패치] 중복 품목 선택 검증 및 알림 고도화
+    if (checkIsDuplicateMedicine(finalName)) {
+      toast.error(`🛑 [등록 불가] '${finalName}'은(는) 이미 복용 중인 약품입니다. '이미 복용 중인 약품 등록 금지 정책'에 의해 차단되었습니다.`, {
+        duration: 5000,
+      });
+      return;
+    }
+
+    setMedName(finalName);
     setMedTypeGuide({
-      type: "식약처 인증 의약품",
-      guide: "공공 데이터베이스에 정상 등록된 의약품 정보입니다."
+      type: "e약은요 매핑 품목",
+      guide: "식품의약품안전처 의약품개요정보 규격으로 스케줄링을 시작합니다."
     });
     setEntryMode('FORM_FILL');
   };
@@ -179,13 +197,7 @@ export function AddMedicineModal({
       const extractedText = data.choices[0]?.message?.content?.trim() || "";
 
       if (extractedText && !extractedText.includes("실패") && !extractedText.includes("없습니다")) {
-        setMedName(extractedText);
-        setMedTypeGuide({ 
-          type: "AI OCR 인식 품목", 
-          guide: "촬영된 사진 분석을 바탕으로 약물 명칭 추출이 완료되었습니다." 
-        });
-        toast.success(`🔍 AI OCR 인식 완료: "${extractedText}"`);
-        setEntryMode('FORM_FILL'); 
+        handleSelectMedicine(extractedText);
       } else {
         setOcrErrorMsg("이미지에서 명확한 약 이름을 판독할 수 없습니다. 글자가 선명하게 보이도록 다시 시도하거나 직접 검색해 주세요.");
       }
@@ -209,14 +221,21 @@ export function AddMedicineModal({
     setSelectedTimes(selectedTimes.filter((_, i) => i !== index));
   };
 
+  // 💾 데이터베이스 최종 보관함 저장 제어
   const handleSaveToCabinet = async (e: React.FormEvent) => {
     e.preventDefault();
     const finalName = medName.trim();
 
     if (!finalName) return toast.error("등록할 의약품 명칭이 없습니다.");
-    if (currentCabinetItems.some(item => item.name === finalName)) {
-      return toast.error(`[등록 불가] '${finalName}'은(는) 이미 보관함에 등록된 의약품입니다.`);
+    
+    // 💡 [정책 패치] 최종 서브밋 단계에서도 한 번 더 중복 검사 작동
+    if (checkIsDuplicateMedicine(finalName)) {
+      toast.error(`❌ [저장 거부] '${finalName}'은(는) 이미 등록된 약품입니다. '이미 복용 중인 약품 등록 금지 정책'으로 인해 저장할 수 없습니다.`, {
+        duration: 6000
+      });
+      return;
     }
+
     if (selectedTimes.length === 0) return toast.error("최소 1개 이상의 알림 시간을 설정해 주세요.");
     if (!startDate || !endDate) return toast.error("복용 시작일과 종료일을 정확히 선택해 주세요.");
     if (new Date(startDate) > new Date(endDate)) return toast.error("종료일이 시작일보다 빠르게 설정될 수 없습니다.");
@@ -236,7 +255,7 @@ export function AddMedicineModal({
         startDate,
         endDate,
         totalQuantity: qty,
-        medType: medTypeGuide?.type || "일반의약품"
+        medType: medTypeGuide?.type || "일반지정의약품"
       });
 
       toast.success(`[저장 완료] '${finalName}' 등록이 완료되었습니다.`);
@@ -259,7 +278,7 @@ export function AddMedicineModal({
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex flex-col justify-end sm:justify-center sm:items-center">
       <div className="w-full sm:max-w-md bg-white rounded-t-[32px] sm:rounded-[32px] max-h-[92vh] flex flex-col overflow-hidden shadow-2xl">
         
-        {/* 상단 헤더 패널 */}
+        {/* 상단 헤더 */}
         <div className="p-6 border-b border-gray-100 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             {entryMode !== 'SELECT_MODE' && (
@@ -269,21 +288,21 @@ export function AddMedicineModal({
             )}
             <div>
               <h2 className="text-sm font-black text-gray-900">새 의약품 복용 등록</h2>
-              <p className="text-[10px] text-gray-400 mt-0.5">식약처 실시간 스케줄러 시스템을 구동합니다.</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">식약처 e약은요 공공 DB 인프라 가동 중</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xs font-bold p-1">✕</button>
         </div>
 
-        {/* 0️⃣ 최초 진입 선택 모드 */}
+        {/* 0️⃣ 선택 모드 패널 */}
         {entryMode === 'SELECT_MODE' && (
           <div className="p-6 space-y-4 flex-1 overflow-y-auto">
             <p className="text-xs font-bold text-gray-500 text-center py-2">등록 방법을 선택해 주세요.</p>
             <div onClick={() => setEntryMode('MANUAL_SEARCH')} className="p-5 border border-gray-100 rounded-2xl bg-gray-50 hover:border-rose-300 cursor-pointer transition-all flex items-center gap-4">
               <div className="size-10 rounded-xl bg-rose-50 flex items-center justify-center text-[#E12756] shrink-0"><Search className="size-5" /></div>
               <div>
-                <h4 className="text-xs font-bold text-gray-800">식약처 API 초고속 검색하여 추가</h4>
-                <p className="text-[10px] text-gray-400 mt-0.5">입력 즉시 공공 DB 데이터베이스를 실시간 매핑합니다.</p>
+                <h4 className="text-xs font-bold text-gray-800">식약처 e약은요 검색하여 추가</h4>
+                <p className="text-[10px] text-gray-400 mt-0.5">공공 API 연동을 통해 안전한 가이드를 조회합니다.</p>
               </div>
             </div>
             <div onClick={() => setEntryMode('PHOTO_CHOICE')} className="p-5 border border-gray-100 rounded-2xl bg-gray-50 hover:border-rose-300 cursor-pointer transition-all flex items-center gap-4">
@@ -296,7 +315,7 @@ export function AddMedicineModal({
           </div>
         )}
 
-        {/* 📷 사진 및 촬영 선택 상세 분기 패널 */}
+        {/* 📷 사진 첨부 상세 분기 */}
         {entryMode === 'PHOTO_CHOICE' && (
           <div className="p-6 space-y-4 flex-1 overflow-y-auto">
             <h3 className="text-xs font-black text-gray-800 text-center">사진 촬영 및 첨부 방식 정의</h3>
@@ -318,7 +337,7 @@ export function AddMedicineModal({
           </div>
         )}
 
-        {/* 📹 카메라 촬영 스트림 모드 */}
+        {/* 📹 카메라 스트림 */}
         {entryMode === 'CAMERA_STREAM' && (
           <div className="p-6 space-y-4 flex-1 overflow-y-auto text-center">
             {!hasCameraPermission ? (
@@ -354,7 +373,7 @@ export function AddMedicineModal({
           </div>
         )}
 
-        {/* 1️⃣ 실시간 검색 가속 보드 (MANUAL_SEARCH) */}
+        {/* 1️⃣ 실시간 검색 및 CORS 안전 안내 보드 */}
         {entryMode === 'MANUAL_SEARCH' && (
           <div className="p-6 flex-1 flex flex-col overflow-hidden">
             <div className="space-y-2 shrink-0 mb-4">
@@ -374,24 +393,26 @@ export function AddMedicineModal({
               </div>
             </div>
 
-            {/* 💡 검색 추천 리스트 뷰포트 바로 연동 */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {isApiLoading && suggestions.length === 0 ? (
                 <div className="text-center py-8 flex flex-col items-center justify-center space-y-1">
-                  <p className="text-[11px] text-gray-400 font-bold">식약처 공공 데이터 조회 중...</p>
+                  <p className="text-[11px] text-gray-400 font-bold">식약처 원격 동기화 연결 중...</p>
                 </div>
-              ) : isTimeoutError ? (
-                /* ⏱️ 타임아웃 발생 시 즉각 절체용 UI 배너 */
-                <div className="p-4 border border-dashed border-amber-200 bg-amber-50/50 rounded-2xl text-center">
-                  <AlertTriangle className="size-5 text-amber-500 mx-auto mb-1.5" />
-                  <p className="text-xs text-amber-800 font-bold">공공데이터 API 서버 응답이 지연되고 있습니다.</p>
-                  <p className="text-[10px] text-gray-400 mt-0.5">서버 부하가 심하므로 대기하지 않고 직접 등록하는 것을 권장합니다.</p>
+              ) : isCorsNetworkError ? (
+                /* 💡 식약처 서버의 웹 브라우저 CORS 차단 정책을 유연하게 처리하는 안내 및 직통 프리패스 카드 */
+                <div className="p-4 border-2 border-dashed border-rose-300 bg-rose-50/40 rounded-2xl text-center shadow-xs">
+                  <AlertTriangle className="size-5 text-[#E12756] mx-auto mb-1.5 animate-bounce" />
+                  <p className="text-xs text-gray-800 font-black">식약처 외부 서버 브라우저 직접 호출 제한(CORS) 감지</p>
+                  <p className="text-[10px] text-gray-500 mt-1 leading-relaxed px-1">
+                    식약처 공공 포털망의 보안 정책으로 인해 브라우저 검색 기능이 제한되었습니다. 
+                    개발 환경 및 배포 환경에 영향받지 않고, **작성하신 약 이름 그대로 1초 만에 바로 일정을 생성**하실 수 있습니다!
+                  </p>
                   <button 
                     type="button" 
-                    onClick={() => handleSelectMedicine(searchKeyword)}
-                    className="mt-3 px-4 py-2 bg-gray-900 text-white font-bold text-[10px] rounded-xl shadow-xs"
+                    onClick={() => handleSelectMedicine(searchKeyword || "지정 안 된 약품")}
+                    className="mt-4 px-4 py-3 bg-[#E12756] text-white font-bold text-xs rounded-xl shadow-md shadow-rose-100 hover:bg-[#c21f47] w-full transition-all active:scale-98"
                   >
-                    입력한 "{searchKeyword}" 명칭으로 바로 입력하기
+                    🚀 "{searchKeyword || '입력한 약 이름'}" 이름으로 직접 등록 계속하기
                   </button>
                 </div>
               ) : suggestions.length > 0 ? (
@@ -413,19 +434,19 @@ export function AddMedicineModal({
                     onClick={() => handleSelectMedicine(searchKeyword)} 
                     className="mt-2.5 text-[10px] text-[#E12756] font-black underline"
                   >
-                    입력한 이름("{searchKeyword}")으로 강제 우회 등록하기
+                    입력한 이름("{searchKeyword}")으로 그냥 바로 등록하기
                   </button>
                 </div>
               ) : (
                 <div className="text-center py-12">
-                  <p className="text-[11px] text-gray-400 font-medium">검색어를 입력하시면 식약처 공공데이터 원격 데이터베이스 목록이 아래에 초고속으로 자동 완성됩니다.</p>
+                  <p className="text-[11px] text-gray-400 font-medium">검색어를 입력하시면 식약처 공공데이터 원격 e약은요 데이터베이스 목록 호출을 시도합니다.</p>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {/* 2️⃣ 선택/인식 완료 후 상세히 추가하는 양식 단계 (FORM_FILL) */}
+        {/* 2️⃣ 상세 폼 작성 단계 */}
         {entryMode === 'FORM_FILL' && (
           <form onSubmit={handleSaveToCabinet} className="flex-1 overflow-y-auto p-6 space-y-4">
             
@@ -434,6 +455,8 @@ export function AddMedicineModal({
                 <span className="text-[9px] text-[#E12756] font-black tracking-tighter bg-rose-50 px-1.5 py-0.5 rounded">등록 의약품명</span>
                 <h4 className="text-xs font-black text-gray-800 mt-1">{medName}</h4>
               </div>
+              {/* 중복 약 검증 상태 마크 */}
+              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md">중복 검증 완료</span>
             </div>
 
             {medTypeGuide && (

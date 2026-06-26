@@ -35,4 +35,16 @@ export default defineConfig({
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
+  
+  server: {
+    proxy: {
+      // 💡 브라우저가 /api/drug로 시작하는 주소로 요청하면 Vite가 가로챕니다.
+      '/api/drug': {
+        target: 'https://apis.data.go.kr', // 진짜 가야 할 식약처 서버 주소
+        changeOrigin: true,
+        // 주소 앞부분의 /api/drug를 지우고 식약처 주소 뒤에 붙여줍니다.
+        rewrite: (path) => path.replace(/^\/api\/drug/, '')
+      }
+    }
+  },
 })
