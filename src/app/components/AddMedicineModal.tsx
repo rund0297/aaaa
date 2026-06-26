@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Search, Image, ArrowLeft, Calendar, Clock, Camera, ShieldAlert, AlertTriangle, Loader2, Ban } from 'lucide-react';
+import { Search, Image, ArrowLeft, Calendar, Clock, Camera, ShieldAlert, AlertTriangle, Loader2 } from 'lucide-react';
 import { addMedicineToDb } from '../../services/firebaseService';
 
 interface AddMedicineModalProps {
@@ -76,16 +76,25 @@ export function AddMedicineModal({
 
     try {
       const serviceKey = "5cde3b05e30f1b984e53d3c73a81f6cb119834c5b39f2a86b8dc84ef89c96e2a";
-      // 💡 [교정 적용] 앞부분 진짜 주소를 /api/drug 라는 가짜 주소(프록시 경로)로 교체합니다.
-      const baseUrl = "/api/drug/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList";
-      const url = `${baseUrl}?serviceKey=${serviceKey}&itemName=${encodeURIComponent(keyword)}&type=json&numOfRows=10`;
+      const servicePath = "1471000/DrbEasyDrugInfoService/getDrbEasyDrugList";
+      const queryParams = `?serviceKey=${serviceKey}&itemName=${encodeURIComponent(keyword)}&type=json&numOfRows=10`;
+
+      // 🎯 [CORS 배포 패치] 환경에 맞춰 요청할 URL 주소를 빌드합니다.
+      let url = "";
+      if (import.meta.env.DEV) {
+        // 💻 로컬 개발 환경: vite.config.ts의 proxy(/api/drug)를 사용합니다.
+        url = `/api/drug/${servicePath}${queryParams}`;
+      } else {
+        // 🚀 실배포 환경: 외부 무료 프록시 서버(allorigins)를 거쳐서 CORS 우회 호출을 처리합니다.
+        const originUrl = `https://apis.data.go.kr/${servicePath}${queryParams}`;
+        url = `https://api.allorigins.win/raw?url=${encodeURIComponent(originUrl)}`;
+      }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500); // 2.5초 빠른 타임아웃
+      const timeoutId = setTimeout(() => controller.abort(), 4000); // 프록시 서버 경유를 고려해 타임아웃을 4초로 변경
 
       const res = await fetch(url, { 
         method: 'GET',
-        mode: 'cors',
         headers: { 'Accept': 'application/json' },
         signal: controller.signal 
       });
@@ -104,7 +113,7 @@ export function AddMedicineModal({
     } catch (error: any) {
       console.warn("식약처 공공 API 브라우저 CORS 제한 정책 감지 -> 우회 가동:", error);
       setSuggestions([]);
-      setIsCorsNetworkError(true); // 💡 브라우저 네트워크 차단 발생 시 우회 UI 스위치 ON
+      setIsCorsNetworkError(true); // 💡 브라우저 네트워크 차단 발생 시 직접 입력 유도 카드 가동
     } finally {
       setIsApiLoading(false);
     }
